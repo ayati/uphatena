@@ -16,6 +16,7 @@ import random
 import hashlib
 import base64
 import argparse
+import pathlib
 import xml.etree.ElementTree as ET
 
 import requests
@@ -23,7 +24,7 @@ import requests
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-DEFAULT_CONFIG = 'foruphatena.txt'
+DEFAULT_CONFIG = pathlib.Path(__file__).parent / 'foruphatena.txt'
 REQUEST_TIMEOUT = 30  # seconds
 
 ATOM_NS = 'http://www.w3.org/2005/Atom'
@@ -137,12 +138,23 @@ def format_body(entries):
     return '\n\n'.join(parts)
 
 
-def build_entry_xml(title, body, username):
-    """Build Atom entry XML using ElementTree (handles escaping automatically)."""
+def build_entry_xml(title, body, username, target_date):
+    """Build Atom entry XML using ElementTree (handles escaping automatically).
+
+    <updated> is fixed to the end of target_date in JST.  Pinning this value
+    ensures that repeated PUT calls never change the <updated> field away from
+    the original post date, which is required for date-range searches in
+    find_entry_edit_url to keep working on re-runs days or months later.
+    """
     root = ET.Element(f'{{{ATOM_NS}}}entry')
 
     title_el = ET.SubElement(root, f'{{{ATOM_NS}}}title')
     title_el.text = title
+
+    # Pin updated to the target date (JST end-of-day) so future re-runs can
+    # still find this entry via updated-min / updated-max filtering.
+    updated_el = ET.SubElement(root, f'{{{ATOM_NS}}}updated')
+    updated_el.text = target_date.strftime('%Y-%m-%dT23:59:59+09:00')
 
     author_el = ET.SubElement(root, f'{{{ATOM_NS}}}author')
     name_el   = ET.SubElement(author_el, f'{{{ATOM_NS}}}name')
@@ -169,35 +181,37 @@ def collection_url(hatena_id, blog_id):
     return f'https://blog.hatena.ne.jp/{hatena_id}/{blog_id}/atom/entry'
 
 
-def find_entry_edit_url(hatena_id, blog_id, api_key, title, max_pages=5):
+def find_entry_edit_url(hatena_id, blog_id, api_key, title, target_date):
     """
-    Search recent entries for one whose title matches `title`.
+    Search for an existing entry whose title matches `title`.
     Returns the edit URL string, or None if not found.
 
-    Hatena Blog AtomPub paginates via ?page=N (1-based).
+    Uses updated-min / updated-max to narrow the API response to entries
+    whose <updated> falls within target_date (JST).  Because build_entry_xml
+    always pins <updated> to the end of target_date, this lookup works
+    correctly for any date regardless of when the script runs — avoiding the
+    duplicate-post bug that occurred when searching by page offset alone.
     """
-    base_url = collection_url(hatena_id, blog_id)
-    for page in range(1, max_pages + 1):
-        r = requests.get(
-            base_url,
-            headers=auth_headers(hatena_id, api_key),
-            params={'page': page},
-            timeout=REQUEST_TIMEOUT,
-        )
-        if r.status_code != 200:
-            sys.exit(f'Failed to fetch entry list (page {page}): {r.status_code}\n{r.text}')
+    base_url    = collection_url(hatena_id, blog_id)
+    updated_min = target_date.strftime('%Y-%m-%dT00:00:00+09:00')
+    updated_max = (target_date + datetime.timedelta(days=1)).strftime('%Y-%m-%dT00:00:00+09:00')
 
-        root = ET.fromstring(r.content)
-        entries = root.findall(f'{{{ATOM_NS}}}entry')
-        if not entries:
-            break  # No more pages
+    r = requests.get(
+        base_url,
+        headers=auth_headers(hatena_id, api_key),
+        params={'updated-min': updated_min, 'updated-max': updated_max},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if r.status_code != 200:
+        sys.exit(f'Failed to fetch entry list: {r.status_code}\n{r.text}')
 
-        for entry in entries:
-            entry_title = entry.findtext(f'{{{ATOM_NS}}}title', '')
-            if entry_title == title:
-                for link in entry.findall(f'{{{ATOM_NS}}}link'):
-                    if link.get('rel') == 'edit':
-                        return link.get('href')
+    root = ET.fromstring(r.content)
+    for entry in root.findall(f'{{{ATOM_NS}}}entry'):
+        entry_title = entry.findtext(f'{{{ATOM_NS}}}title', '')
+        if entry_title == title:
+            for link in entry.findall(f'{{{ATOM_NS}}}link'):
+                if link.get('rel') == 'edit':
+                    return link.get('href')
 
     return None
 
@@ -271,7 +285,7 @@ def main():
         return
 
     body     = format_body(entries)
-    xml_data = build_entry_xml(title, body, hatena_id)
+    xml_data = build_entry_xml(title, body, hatena_id, target_date)
 
     # Dry-run: show and exit
     if args.dry_run:
@@ -283,7 +297,7 @@ def main():
 
     # Check for existing entry with the same title
     print(f'[{title}] Searching for existing entry...')
-    edit_url = find_entry_edit_url(hatena_id, blog_id, api_key, title)
+    edit_url = find_entry_edit_url(hatena_id, blog_id, api_key, title, target_date)
 
     if edit_url:
         print(f'[{title}] Found existing entry. Updating ({edit_url})')
