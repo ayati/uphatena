@@ -1,0 +1,9 @@
+foruphatena.txt
+memo.txt
+*.log
+__pycache__/
+*.py[cod]
+uphatena.sh
+sample/
+.claude/
+CLAUDE.md
