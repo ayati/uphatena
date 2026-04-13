@@ -24,9 +24,14 @@ import requests
 # Constants
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG = 'foruphatena.txt'
+REQUEST_TIMEOUT = 30  # seconds
 
 ATOM_NS = 'http://www.w3.org/2005/Atom'
 APP_NS  = 'http://www.w3.org/2007/app'
+
+# Register once at module level to avoid repeated global side-effects
+ET.register_namespace('',    ATOM_NS)
+ET.register_namespace('app', APP_NS)
 
 # Matches a public entry: YYYY/MM/DD HH:MM:SS body
 PUBLIC_RE  = re.compile(r'^([1-2]\d{3}/\d{2}/\d{2})\s+(\d{2}:\d{2}:\d{2})\s*(.*)')
@@ -134,9 +139,6 @@ def format_body(entries):
 
 def build_entry_xml(title, body, username):
     """Build Atom entry XML using ElementTree (handles escaping automatically)."""
-    ET.register_namespace('',    ATOM_NS)
-    ET.register_namespace('app', APP_NS)
-
     root = ET.Element(f'{{{ATOM_NS}}}entry')
 
     title_el = ET.SubElement(root, f'{{{ATOM_NS}}}title')
@@ -171,33 +173,31 @@ def find_entry_edit_url(hatena_id, blog_id, api_key, title, max_pages=5):
     """
     Search recent entries for one whose title matches `title`.
     Returns the edit URL string, or None if not found.
+
+    Hatena Blog AtomPub paginates via ?page=N (1-based).
     """
-    url = collection_url(hatena_id, blog_id)
-    page = 1
-    while url and page <= max_pages:
+    base_url = collection_url(hatena_id, blog_id)
+    for page in range(1, max_pages + 1):
         r = requests.get(
-            url,
+            base_url,
             headers=auth_headers(hatena_id, api_key),
+            params={'page': page},
+            timeout=REQUEST_TIMEOUT,
         )
         if r.status_code != 200:
             sys.exit(f'Failed to fetch entry list (page {page}): {r.status_code}\n{r.text}')
 
         root = ET.fromstring(r.content)
+        entries = root.findall(f'{{{ATOM_NS}}}entry')
+        if not entries:
+            break  # No more pages
 
-        for entry in root.findall(f'{{{ATOM_NS}}}entry'):
+        for entry in entries:
             entry_title = entry.findtext(f'{{{ATOM_NS}}}title', '')
             if entry_title == title:
                 for link in entry.findall(f'{{{ATOM_NS}}}link'):
                     if link.get('rel') == 'edit':
                         return link.get('href')
-
-        # Follow 'next' link for pagination
-        url = None
-        for link in root.findall(f'{{{ATOM_NS}}}link'):
-            if link.get('rel') == 'next':
-                url = link.get('href')
-                break
-        page += 1
 
     return None
 
@@ -207,6 +207,7 @@ def api_post(hatena_id, blog_id, api_key, xml_data):
         collection_url(hatena_id, blog_id),
         data=xml_data,
         headers=auth_headers(hatena_id, api_key),
+        timeout=REQUEST_TIMEOUT,
     )
 
 
@@ -215,6 +216,7 @@ def api_put(edit_url, hatena_id, api_key, xml_data):
         edit_url,
         data=xml_data,
         headers=auth_headers(hatena_id, api_key),
+        timeout=REQUEST_TIMEOUT,
     )
 
 
