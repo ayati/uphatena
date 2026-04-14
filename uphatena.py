@@ -99,26 +99,62 @@ def parse_memo(filepath, target_date):
     Read memo.txt and return list of (time_str, body) for target_date.
 
     Rules:
-    - Lines not starting with YYYY/MM/DD are ignored (including blank lines).
-    - Lines matching PRIVATE_RE (time preceded by - or +) are skipped.
-    - Remaining PUBLIC_RE matches for target_date are collected in file order
-      (memo.txt is written newest-first, so result is descending time order).
+    - A line starting with YYYY/MM/DD begins a new entry (the header line).
+    - Lines NOT starting with YYYY/MM/DD are continuation lines that belong
+      to the most recent header line seen so far.
+    - Header lines matching PRIVATE_RE (time preceded by - or +) are private:
+      that entry and all its continuation lines are skipped.
+    - Header lines for dates other than target_date are also skipped (with
+      their continuations).
+    - Qualifying entries are collected in file order (memo.txt is written
+      newest-first, so result is descending time order).
+    - body is a multi-line string; trailing blank lines are stripped.
     """
     target_str = target_date.strftime('%Y/%m/%d')
     entries = []
+
+    # State for the entry currently being accumulated.
+    cur_public  = False   # True only for public entries on target_date
+    cur_time    = None    # time string of current entry, or None
+    cur_lines   = []      # body lines accumulated so far
+
+    def _finalize():
+        if cur_public and cur_time is not None:
+            lines = cur_lines[:]
+            while lines and not lines[-1].strip():
+                lines.pop()
+            entries.append((cur_time, '\n'.join(lines)))
+
     try:
         with open(filepath, encoding='utf-8') as f:
             for line in f:
                 line = line.rstrip()
                 if not DATE_START.match(line):
+                    # Continuation line: append to current entry if it qualifies
+                    if cur_public:
+                        cur_lines.append(line)
                     continue
+
+                # New header line — finalize previous entry first
+                _finalize()
+                cur_public = False
+                cur_time   = None
+                cur_lines  = []
+
                 if PRIVATE_RE.match(line):
-                    continue
+                    continue  # private entry; cur_public stays False
+
                 m = PUBLIC_RE.match(line)
-                if not m:
-                    continue
-                if m.group(1) == target_str:
-                    entries.append((m.group(2), m.group(3).strip()))
+                if not m or m.group(1) != target_str:
+                    continue  # wrong date or unrecognised format
+
+                cur_public = True
+                cur_time   = m.group(2)
+                first_line = m.group(3).strip()
+                if first_line:
+                    cur_lines.append(first_line)
+
+        _finalize()  # handle the last entry in the file
     except FileNotFoundError:
         sys.exit(f'Diary file not found: {filepath}')
     return entries
