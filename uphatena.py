@@ -34,12 +34,15 @@ APP_NS  = 'http://www.w3.org/2007/app'
 ET.register_namespace('',    ATOM_NS)
 ET.register_namespace('app', APP_NS)
 
-# Matches a public entry: YYYY/MM/DD HH:MM:SS body
-PUBLIC_RE  = re.compile(r'^([1-2]\d{3}/\d{2}/\d{2})\s+(\d{2}:\d{2}:\d{2})\s*(.*)')
-# Matches a private entry: YYYY/MM/DD -HH:MM:SS or +HH:MM:SS
-PRIVATE_RE = re.compile(r'^[1-2]\d{3}/\d{2}/\d{2}[ ]+[-+]\d{2}:\d{2}:\d{2}')
-# Matches any line starting with YYYY/MM/DD
-DATE_START = re.compile(r'^[1-2]\d{3}/\d{2}/\d{2}')
+# Date prefix pattern: accepts both YYYY/MM/DD and YYYY-MM-DD separators
+_DATE = r'[1-2]\d{3}[/\-]\d{2}[/\-]\d{2}'
+
+# Matches a public entry: YYYY/MM/DD or YYYY-MM-DD, then HH:MM:SS body
+PUBLIC_RE  = re.compile(r'^(' + _DATE + r')\s+(\d{2}:\d{2}:\d{2})\s*(.*)')
+# Matches a private entry: date separator [-+] before HH:MM:SS
+PRIVATE_RE = re.compile(r'^' + _DATE + r'[ ]+[-+]\d{2}:\d{2}:\d{2}')
+# Matches any line starting with a date (either separator)
+DATE_START = re.compile(r'^' + _DATE)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +148,7 @@ def parse_memo(filepath, target_date):
                     continue  # private entry; cur_public stays False
 
                 m = PUBLIC_RE.match(line)
-                if not m or m.group(1) != target_str:
+                if not m or m.group(1).replace('-', '/') != target_str:
                     continue  # wrong date or unrecognised format
 
                 cur_public = True
