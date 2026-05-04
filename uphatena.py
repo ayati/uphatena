@@ -47,6 +47,8 @@ _SEP  = r'(?:\s+|T)'
 PUBLIC_RE  = re.compile(r'^(' + _DATE + r')' + _SEP + r'(' + _TIME + r')\s*(.*)')
 # Matches a private entry: date separator [-+] before HH:MM:SS[TZ]
 PRIVATE_RE = re.compile(r'^'  + _DATE       + _SEP + r'[-+]'  + _TIME)
+# Matches a private entry: HH:MM:SS[TZ] followed by '*'
+PRIVATE_AST_RE = re.compile(r'^' + _DATE + _SEP + _TIME + r'\*')
 # Matches any line starting with a date (either separator)
 DATE_START = re.compile(r'^' + _DATE)
 
@@ -116,8 +118,9 @@ def parse_memo(filepath, target_date):
       The suffix is parsed but discarded — the heading shows HH:MM:SS only.
     - Lines NOT starting with a date prefix are continuation lines that
       belong to the most recent header line seen so far.
-    - Header lines matching PRIVATE_RE (time preceded by - or +) are private:
-      that entry and all its continuation lines are skipped.
+    - Header lines matching PRIVATE_RE (time preceded by - or +) or
+      PRIVATE_AST_RE (time/TZ followed by '*') are private: that entry and
+      all its continuation lines are skipped.
     - Header lines for dates other than target_date are also skipped (with
       their continuations).
     - Qualifying entries are collected in file order (memo.txt is written
@@ -160,7 +163,7 @@ def parse_memo(filepath, target_date):
                 if line[4] == '/' and line[10:11] == 'T':
                     continue
 
-                if PRIVATE_RE.match(line):
+                if PRIVATE_RE.match(line) or PRIVATE_AST_RE.match(line):
                     continue  # private entry; cur_public stays False
 
                 m = PUBLIC_RE.match(line)
