@@ -36,11 +36,17 @@ ET.register_namespace('app', APP_NS)
 
 # Date prefix pattern: accepts both YYYY/MM/DD and YYYY-MM-DD separators
 _DATE = r'[1-2]\d{3}[/\-]\d{2}[/\-]\d{2}'
+# Optional ISO 8601 timezone suffix: Z | +HH:MM | -HH:MM | +HHMM | -HHMM
+_TZ   = r'(?:Z|[+\-]\d{2}:?\d{2})'
+# Time portion: HH:MM:SS with optional TZ suffix
+_TIME = r'\d{2}:\d{2}:\d{2}' + _TZ + r'?'
+# Date/time separator: whitespace (legacy) OR literal T (ISO 8601)
+_SEP  = r'(?:\s+|T)'
 
-# Matches a public entry: YYYY/MM/DD or YYYY-MM-DD, then HH:MM:SS body
-PUBLIC_RE  = re.compile(r'^(' + _DATE + r')\s+(\d{2}:\d{2}:\d{2})\s*(.*)')
-# Matches a private entry: date separator [-+] before HH:MM:SS
-PRIVATE_RE = re.compile(r'^' + _DATE + r'[ ]+[-+]\d{2}:\d{2}:\d{2}')
+# Matches a public entry: YYYY/MM/DD or YYYY-MM-DD, then HH:MM:SS[TZ] body
+PUBLIC_RE  = re.compile(r'^(' + _DATE + r')' + _SEP + r'(' + _TIME + r')\s*(.*)')
+# Matches a private entry: date separator [-+] before HH:MM:SS[TZ]
+PRIVATE_RE = re.compile(r'^'  + _DATE       + _SEP + r'[-+]'  + _TIME)
 # Matches any line starting with a date (either separator)
 DATE_START = re.compile(r'^' + _DATE)
 
@@ -102,9 +108,14 @@ def parse_memo(filepath, target_date):
     Read memo.txt and return list of (time_str, body) for target_date.
 
     Rules:
-    - A line starting with YYYY/MM/DD begins a new entry (the header line).
-    - Lines NOT starting with YYYY/MM/DD are continuation lines that belong
-      to the most recent header line seen so far.
+    - A line starting with a date prefix (YYYY/MM/DD or YYYY-MM-DD) begins
+      a new entry (the header line). Date and time may be separated by
+      whitespace (legacy) or by the literal 'T' (ISO 8601). The T form
+      requires the hyphen date; YYYY/MM/DDT... is rejected as malformed.
+    - The time may carry an ISO 8601 timezone suffix (Z, +HH:MM, -HHMM, ...).
+      The suffix is parsed but discarded — the heading shows HH:MM:SS only.
+    - Lines NOT starting with a date prefix are continuation lines that
+      belong to the most recent header line seen so far.
     - Header lines matching PRIVATE_RE (time preceded by - or +) are private:
       that entry and all its continuation lines are skipped.
     - Header lines for dates other than target_date are also skipped (with
@@ -144,6 +155,11 @@ def parse_memo(filepath, target_date):
                 cur_time   = None
                 cur_lines  = []
 
+                # ISO 8601 T separator is only valid with hyphen-date.
+                # Reject e.g. "2026/04/12T14:30:40" as malformed.
+                if line[4] == '/' and line[10:11] == 'T':
+                    continue
+
                 if PRIVATE_RE.match(line):
                     continue  # private entry; cur_public stays False
 
@@ -152,7 +168,7 @@ def parse_memo(filepath, target_date):
                     continue  # wrong date or unrecognised format
 
                 cur_public = True
-                cur_time   = m.group(2)
+                cur_time   = m.group(2)[:8]   # heading uses HH:MM:SS only; TZ suffix discarded
                 first_line = m.group(3).strip()
                 if first_line:
                     cur_lines.append(first_line)
